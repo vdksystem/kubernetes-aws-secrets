@@ -1,0 +1,5 @@
+# This is part of aws-auth configMap
+data:
+  mapRoles: |
+    - rolearn: ARN for newly created lambda role
+      username: kubernetes-aws-secrets

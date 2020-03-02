@@ -1,0 +1,26 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: kubernetes-aws-secrets
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs:
+      - get
+      - list
+      - create
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kubernetes-aws-secrets
+  namespace: devops
+subjects:
+  - kind: User
+    name: kubernetes-aws-secrets
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: kubernetes-aws-secrets
+  apiGroup: rbac.authorization.k8s.io

@@ -1,2 +1,3 @@
 /.idea/
 /samconfig.toml
+/kubernetes-aws-secrets/vendor/

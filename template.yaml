@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  kubernetes-aws-secrets
+  
+  Sample SAM Template for kubernetes-aws-secrets
+Globals:
+  Function:
+    Timeout: 5
+
+Resources:
+  KubernetesAwsSecrets:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: kubernetes-aws-secrets/
+      Handler: main
+      Runtime: go1.x
+      Tracing: PassThrough
+      MemorySize: 128
+      Events:
+        CatchAll:
+          Type: CloudWatchEvent
+          Properties:
+            Pattern:
+              source: ["aws.secretsmanager"]
+              region: [!Ref "AWS::Region"]
+            InputPath: "$.detail.requestParameters.secretId"
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+                - secretsmanager:ListSecretVersionIds
+                - secretsmanager:ListSecrets
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - eks:DescribeCluster
+                - eks:ListClusters
+              Resource: '*'
