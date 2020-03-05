@@ -8,6 +8,18 @@ Globals:
   Function:
     Timeout: 5
 
+Parameters:
+  SourceName:
+    Type: String
+    Default: "k8s.secrets"
+    Description: "Name of the source to use in event source."
+  ClusterId:
+    Type: String
+    Description: "EKS cluster ID"
+  Region:
+    Type: String
+    Description: "EKS cluster region, default to current region"
+
 Resources:
   KubernetesAwsSecrets:
     Type: AWS::Serverless::Function
@@ -22,8 +34,9 @@ Resources:
           Type: CloudWatchEvent
           Properties:
             Pattern:
-              source: ["aws.secretsmanager"]
-              region: [!Ref "AWS::Region"]
+              source: [!Ref SourceName]
+              detail:
+                tags: [{ "Fn::Sub": [ "kubernetes.io/cluster/${Source}", { "Source": {"Ref" : "SourceName" }} ]}]
             InputPath: "$.detail.requestParameters.secretId"
       Policies:
         - Version: '2012-10-17'
@@ -40,3 +53,6 @@ Resources:
                 - eks:DescribeCluster
                 - eks:ListClusters
               Resource: '*'
+      Environment:
+        ClusterId: !Ref ClusterId
+        Region: !Ref Region

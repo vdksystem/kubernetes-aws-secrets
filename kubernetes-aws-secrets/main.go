@@ -21,51 +21,51 @@ import (
 	"strings"
 )
 
-type sync struct {
-	secrets  *secretsmanager.SecretsManager
-	eks      *eks.EKS
-	k8s      *kubernetes.Clientset
-	clusters []string
-}
-
 type awsSecret struct {
 	name        string
 	namespace   string
 	labels      map[string]string
 	annotations map[string]string
 	stringData  map[string]string
-	clusters    []string
 }
 
 func LambdaHandler(ctx context.Context, secretName string) error {
 	log.Printf("Got update event for %s", secretName)
 
+	awsSecret := getAwsSecret(secretName)
+
+	region := os.Getenv("Region")
+	if strings.TrimSpace(region) == "" {
+		region = os.Getenv("AWS_REGION")
+	}
+
 	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(os.Getenv("AWS_REGION"))},
+		Region: aws.String(region)},
 	)
 	checkError(err)
 
-	awsSecret := getAwsSecret(secretName, sess)
-
-	for _, cluster := range awsSecret.clusters {
-		log.Println(cluster)
-		k8s := getK8sClientSet(cluster, sess)
-		secret, err := k8s.CoreV1().Secrets(awsSecret.namespace).Get(awsSecret.name, metav1.GetOptions{})
-		if err != nil {
-			if errors.IsNotFound(err) {
-				createSecret(awsSecret, k8s)
-				return nil
-			}
-			log.Fatal(err)
+	clusterId := os.Getenv("ClusterId")
+	k8s := getK8sClientSet(clusterId, sess)
+	secret, err := k8s.CoreV1().Secrets(awsSecret.namespace).Get(awsSecret.name, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			createSecret(awsSecret, k8s)
+			return nil
 		}
-		updateSecret(awsSecret, secret, k8s)
+		log.Fatal(err)
 	}
+	updateSecret(awsSecret, secret, k8s)
 	return nil
 }
 
-func getAwsSecret(name string, s *session.Session) *awsSecret {
+func getAwsSecret(name string) *awsSecret {
 	var secret = new(awsSecret)
-	secrets := secretsmanager.New(s)
+
+	// We assume that lambda is located in the same region with secrets
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(os.Getenv("AWS_REGION"))},
+	)
+	secrets := secretsmanager.New(sess)
 
 	input := &secretsmanager.GetSecretValueInput{
 		SecretId:     aws.String(name),
@@ -118,7 +118,6 @@ func getAwsSecret(name string, s *session.Session) *awsSecret {
 
 	secret.labels = labels
 	secret.annotations = annotations
-	secret.clusters = clusters
 	secret.stringData = stringData
 	secret.name = strings.SplitN(name, "/", 2)[1]
 	secret.namespace = strings.SplitN(name, "/", 2)[0]
