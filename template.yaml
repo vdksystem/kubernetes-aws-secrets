@@ -9,6 +9,15 @@ Globals:
     Timeout: 5
 
 Resources:
+  EventTransformer:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location:
+        ApplicationId: arn:aws:serverlessrepo:eu-west-1:293164415232:applications/event-transformer
+        SemanticVersion: 0.0.1
+      Parameters:
+       SourceName: !Ref SourceName
+
   KubernetesAwsSecrets:
     Type: AWS::Serverless::Function
     Properties:
