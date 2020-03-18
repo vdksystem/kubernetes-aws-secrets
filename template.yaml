@@ -2,8 +2,22 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
   kubernetes-aws-secrets
-  
+
   Sample SAM Template for kubernetes-aws-secrets
+Metadata:
+  AWS::ServerlessRepo::Application:
+    Name: kubernetes-aws-secrets
+    Description: Sync AWS SecretsManager secrets with kubernetes secrets
+    Author: Dmitry Kuleshov
+    SpdxLicenseId: Apache-2.0
+    LicenseUrl: LICENSE.txt
+    ReadmeUrl: README.md
+    Labels:
+      - k8s
+      - secrets
+    HomePageUrl: https://github.com/vdksystem/kubernetes-aws-secrets
+    SemanticVersion: 0.0.1
+    SourceCodeUrl: https://github.com/vdksystem/kubernetes-aws-secrets
 Globals:
   Function:
     Timeout: 5
@@ -11,14 +25,18 @@ Globals:
 Parameters:
   SourceName:
     Type: String
-    Default: "k8s.secrets"
-    Description: "Name of the source to use in event source."
+    Default: 'k8s.secrets'
+    Description: 'Name of the source to use in event source.'
   ClusterId:
     Type: String
-    Description: "EKS cluster ID"
-  Region:
+    Description: 'EKS cluster ID'
+  EKSRegion:
     Type: String
-    Description: "EKS cluster region, default to current region"
+    Description: 'EKS cluster region, default to current region'
+  RoleARN:
+    Type: String
+    Default: ""
+    Description: "IAM role ARN to assume"
 
 Resources:
   KubernetesAwsSecrets:
@@ -36,8 +54,10 @@ Resources:
             Pattern:
               source: [!Ref SourceName]
               detail:
-                tags: [{ "Fn::Sub": [ "kubernetes.io/cluster/${Source}", { "Source": {"Ref" : "SourceName" }} ]}]
-            InputPath: "$.detail.requestParameters.secretId"
+                tags:
+                  Key:
+                    - !Sub 'kubernetes.io/cluster/${ClusterId}'
+            InputPath: "$.detail.secretId"
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -50,9 +70,10 @@ Resources:
               Resource: '*'
             - Effect: Allow
               Action:
-                - eks:DescribeCluster
-                - eks:ListClusters
-              Resource: '*'
+                - sts:AssumeRole
+              Resource: !Ref RoleARN
       Environment:
-        ClusterId: !Ref ClusterId
-        Region: !Ref Region
+        Variables:
+          ClusterId: !Ref ClusterId
+          EKSRegion: !Ref EKSRegion
+          Role: !Ref RoleARN

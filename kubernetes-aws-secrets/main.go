@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/eks"
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
@@ -24,28 +26,29 @@ import (
 type awsSecret struct {
 	name        string
 	namespace   string
+	env         string
 	labels      map[string]string
 	annotations map[string]string
 	stringData  map[string]string
 }
+type config struct {
+	region  string
+	role    string
+	creds   *credentials.Credentials
+	secrets *secretsmanager.SecretsManager
+	eks     *eks.EKS
+}
+
+var cfg = new(config)
 
 func LambdaHandler(ctx context.Context, secretName string) error {
 	log.Printf("Got update event for %s", secretName)
+	initConfig()
 
 	awsSecret := getAwsSecret(secretName)
 
-	region := os.Getenv("Region")
-	if strings.TrimSpace(region) == "" {
-		region = os.Getenv("AWS_REGION")
-	}
-
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(region)},
-	)
-	checkError(err)
-
 	clusterId := os.Getenv("ClusterId")
-	k8s := getK8sClientSet(clusterId, sess)
+	k8s := getK8sClientSet(clusterId)
 	secret, err := k8s.CoreV1().Secrets(awsSecret.namespace).Get(awsSecret.name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -61,17 +64,12 @@ func LambdaHandler(ctx context.Context, secretName string) error {
 func getAwsSecret(name string) *awsSecret {
 	var secret = new(awsSecret)
 
-	// We assume that lambda is located in the same region with secrets
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(os.Getenv("AWS_REGION"))},
-	)
-	secrets := secretsmanager.New(sess)
-
 	input := &secretsmanager.GetSecretValueInput{
 		SecretId:     aws.String(name),
 		VersionStage: aws.String("AWSCURRENT"), // VersionStage defaults to AWSCURRENT if unspecified
 	}
 
+	secrets := cfg.secrets
 	result, err := secrets.GetSecretValue(input)
 	checkError(err)
 
@@ -89,26 +87,26 @@ func getAwsSecret(name string) *awsSecret {
 	}
 
 	var clusters []string
-	regCluster, err := regexp.Compile("^kubernetes.io/cluster/(.*)")
+	regCluster, err := regexp.Compile(`^kubernetes.io/cluster/(.*)`)
 	checkError(err)
 
 	var labels = make(map[string]string)
-	regLabel, err := regexp.Compile("^label/(.*)")
+	regLabel, err := regexp.Compile(`^label/(.*)`)
 	checkError(err)
 
 	var annotations = make(map[string]string)
-	regAn, err := regexp.Compile("^annotation/(.*)")
+	regAn, err := regexp.Compile(`^annotation/(.*)`)
 	checkError(err)
 
-	tags := getSecretTags(name, secrets)
+	tags := getSecretTags(name)
 	for _, t := range tags {
 		if regLabel.MatchString(*t.Key) {
 			label := regLabel.FindStringSubmatch(*t.Key)[1]
 			labels[label] = *t.Value
 		}
 		if regAn.MatchString(*t.Key) {
-			annottation := regAn.FindStringSubmatch(*t.Key)[1]
-			annotations[annottation] = *t.Value
+			annotation := regAn.FindStringSubmatch(*t.Key)[1]
+			annotations[annotation] = *t.Value
 		}
 		if regCluster.MatchString(*t.Key) {
 			cluster := regCluster.FindStringSubmatch(*t.Key)[1]
@@ -119,33 +117,34 @@ func getAwsSecret(name string) *awsSecret {
 	secret.labels = labels
 	secret.annotations = annotations
 	secret.stringData = stringData
-	secret.name = strings.SplitN(name, "/", 2)[1]
-	secret.namespace = strings.SplitN(name, "/", 2)[0]
+	secret.name = strings.SplitN(name, "/", 3)[2]
+	secret.namespace = strings.SplitN(name, "/", 3)[1]
+	secret.env = strings.SplitN(name, "/", 3)[0]
 
 	return secret
 }
 
-func getSecretTags(secretId string, secrets *secretsmanager.SecretsManager) []*secretsmanager.Tag {
+func getSecretTags(secretId string) []*secretsmanager.Tag {
 	input := &secretsmanager.DescribeSecretInput{
 		SecretId: aws.String(secretId),
 	}
 
+	secrets := cfg.secrets
 	output, err := secrets.DescribeSecret(input)
 	checkError(err)
 
 	return output.Tags
 }
 
-func getK8sClientSet(clusterID string, s *session.Session) *kubernetes.Clientset {
-	eksCluster := eks.New(s)
-
+func getK8sClientSet(clusterID string) *kubernetes.Clientset {
+	eksCluster := cfg.eks
 	input := eks.DescribeClusterInput{Name: &clusterID}
 	output, err := eksCluster.DescribeCluster(&input)
 	checkError(err)
+	caData, _ := base64.StdEncoding.DecodeString(*output.Cluster.CertificateAuthority.Data)
 
 	k8sToken := getToken(clusterID)
 
-	caData, _ := base64.StdEncoding.DecodeString(*output.Cluster.CertificateAuthority.Data)
 	config := rest.Config{
 		Host:            *output.Cluster.Endpoint,
 		BearerToken:     k8sToken.Token,
@@ -164,8 +163,9 @@ func getToken(clusterID string) token.Token {
 	checkError(err)
 
 	tok, err = gen.GetWithOptions(&token.GetTokenOptions{
-		ClusterID: clusterID,
-		Region:    os.Getenv("AWS_REGION"),
+		ClusterID:     clusterID,
+		Region:        cfg.region,
+		AssumeRoleARN: cfg.role,
 	})
 	checkError(err)
 
@@ -182,6 +182,7 @@ func createSecret(awsSecret *awsSecret, k8s *kubernetes.Clientset) {
 	checkError(err)
 	log.Printf("Successfully created secret %s, namespace %s", res.Name, res.Namespace)
 }
+
 func updateSecret(awsSecret *awsSecret, secret *v1.Secret, k8s *kubernetes.Clientset) {
 	secret.Name = awsSecret.name
 	secret.StringData = awsSecret.stringData
@@ -191,13 +192,39 @@ func updateSecret(awsSecret *awsSecret, secret *v1.Secret, k8s *kubernetes.Clien
 	checkError(err)
 	log.Printf("Successfully updated secret %s, namespace %s", res.Name, res.Namespace)
 }
+
 func checkError(err error) {
 	if err != nil {
 		log.Fatal(err)
 	}
 }
+
+func initConfig() {
+	// We assume that lambda is located in the same region with secrets
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(os.Getenv("AWS_REGION"))},
+	)
+	checkError(err)
+	cfg.secrets = secretsmanager.New(sess)
+
+	if strings.TrimSpace(os.Getenv("EKSRegion")) == "" {
+		cfg.region = os.Getenv("AWS_REGION")
+	} else {
+		cfg.region = os.Getenv("EKSRegion")
+	}
+	cfg.role = os.Getenv("Role")
+
+	eksSession := session.Must(session.NewSession(&aws.Config{
+		Region: aws.String(cfg.region)},
+	))
+	cfg.creds = stscreds.NewCredentials(eksSession, cfg.role)
+
+	cfg.eks = eks.New(eksSession, &aws.Config{
+		Credentials: cfg.creds,
+		Region:      &cfg.region,
+	})
+}
 func main() {
-	//TODO filter by cluster
 	lambda.Start(LambdaHandler)
-	//_ = LambdaHandler(context.Background(), "devops/lambdatest")
+	//_ = LambdaHandler(context.Background(), "ci/devops/lambdatest")
 }
