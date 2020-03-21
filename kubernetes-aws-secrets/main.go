@@ -55,7 +55,7 @@ func LambdaHandler(ctx context.Context, secretName string) error {
 			createSecret(awsSecret, k8s)
 			return nil
 		}
-		log.Fatal(err)
+		log.Fatalf("ERROR: %v", err)
 	}
 	updateSecret(awsSecret, secret, k8s)
 	return nil
@@ -83,7 +83,8 @@ func getAwsSecret(name string) *awsSecret {
 	secretMap := f.(map[string]interface{})
 	stringData := make(map[string]string)
 	for k, v := range secretMap {
-		stringData[k] = v.(string)
+		sec := v.(string)
+		stringData[k] = strings.TrimSpace(sec)
 	}
 
 	var clusters []string
@@ -195,7 +196,7 @@ func updateSecret(awsSecret *awsSecret, secret *v1.Secret, k8s *kubernetes.Clien
 
 func checkError(err error) {
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("ERROR: %v", err)
 	}
 }
 
